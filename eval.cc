@@ -1,56 +1,59 @@
+#include <iostream>
+#include <experimental/optional>
+#include <stdexcept>
+#include <vector>
+
 class Value {
     double number;
 public:
     Value(double d): number{d} {}
-    operator double() { return number; }
+    operator double() const { return number; }
 };
 
 class Device {
 public:
     virtual ~Device() = default;
-    virtual void on_update(Wire* cause) {
-        std::cout << "New value: " << cause->get_signal() << "." << std::endl;
-    }
-    virtual void on_forget(Wire* cause) {
-        std::cout << "Forget value." << std::endl;
-    }
+    virtual void on_update(class Wire* cause) {}
+    virtual void on_forget(class Wire* cause) {}
     static Device USER;
 };
 
-Device Device::USER;
+Device Device::USER{};
 
 class Wire {
-    std::optional<Value> signal;
+    std::experimental::optional<Value> signal;
     Device* emitter;
     std::vector<Device*> constraints;
 public:
+    std::string name;
     Wire() = default;
+    Wire(std::string n): name{n} {}
     void set_signal(Value v, Device* d) {
         if (emitter == &Device::USER && d != &Device::USER) {
-            throw std::runtime_error{"Trying to override user provided signal."}
+            throw std::runtime_error{"Trying to override user provided value."};
         }
         else {
             signal = v;
             emitter = d;
             for (auto* lsn : constraints) {
                 if (lsn != d) {
-                    lsn.on_update(this);
+                    lsn->on_update(this);
                 }
             }
         }
     }
-    void unset_signal(Device* d) {
-        if (emitter == &Device::USER && d != &Device::USER) {
-            throw std::runtime_error{"Trying to forget user provided signal."}
-        }
-        else {
-            signal.reset();
+    void reset_signal(Device* d) {
+        if (emitter != &Device::USER || d == &Device::USER) {
+            signal = std::experimental::nullopt;
             emitter = d;
             for (auto* lsn : constraints) {
                 if (lsn != d) {
-                    lsn.on_forget(this);
+                    lsn->on_forget(this);
                 }
             }
+        }
+        if (d == &Device::USER) {
+            emitter = nullptr;
         }
     }
     Value get_signal() {
@@ -60,7 +63,7 @@ public:
         return *signal;
     }
     bool is_set() {
-        return signal.has_value();
+        return (bool)signal;
     }
     void add_constraint(Device* d) {
         constraints.push_back(d);
@@ -70,38 +73,62 @@ public:
     }
 };
 
+class PrintDevice: public Device {
+public:
+    void on_update(class Wire* cause) override {
+        std::cout << "New value: "
+                  << cause->name
+                  << " = "
+                  << (double)cause->get_signal() << "." << std::endl;
+    }
+    void on_forget(class Wire* cause) override {
+        std::cout << "Forget value: "
+                  << cause->name
+                  << " = ?."
+                  << std::endl;
+    }
+};
+
 class Adder: public Device {
     Wire* addend1;
     Wire* addend2;
     Wire* sum;
 public:
     Adder(Wire* a1, Wire* a2, Wire* s):
-        addend1{a1}, addend2{a2}, sum{s} {}
+        addend1{a1}, addend2{a2}, sum{s} {
+        addend1->add_constraint(this);
+        addend2->add_constraint(this);
+        sum->add_constraint(this);
+    }
     void on_update(Wire*) override {
         if (addend1->is_set() && addend2->is_set()) {
-            sum->set_signal(*addend1 + *addend2);
+            sum->set_signal((double)**addend1 + (double)**addend2, this);
         }
         else if (addend1->is_set() && sum->is_set()) {
-            addend2->set_signal(*sum - *addend1);
+            addend2->set_signal((double)**sum - (double)**addend1, this);
         }
         else if (addend2->is_set() && sum->is_set()) {
-            addend1->set_signal(*sum - *addend2);
+            addend1->set_signal((double)**sum - (double)**addend2, this);
         }
     }
     void on_forget(Wire*) override {
-        addend1->unset_signal(this);
-        addend2->unset_signal(this);
-        sum->unset_signal(this);
+        addend1->reset_signal(this);
+        addend2->reset_signal(this);
+        sum->reset_signal(this);
         on_update(nullptr);
     }
 };
 
 int main() {
-    Wire a1, a2, sum;
+    Wire a1{"a1"}, a2{"a2"}, sum{"sum"};
+    PrintDevice print;
+    a1.add_constraint(&print);
+    a2.add_constraint(&print);
+    sum.add_constraint(&print);
     Adder adder{&a1, &a2, &sum};
-    Device print;
-    sum.add_constraint(print);
-    a1.set_signal(5);
-    a2.set_signal(6);
+    a1.set_signal(5, &Device::USER);
+    a2.set_signal(6, &Device::USER);
+    a2.reset_signal(&Device::USER);
+    sum.set_signal(8, &Device::USER);
     return 0;
 }
