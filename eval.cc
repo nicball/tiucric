@@ -111,21 +111,46 @@ public:
             addend1->set_signal((double)**sum - (double)**addend2, this);
         }
     }
-    void on_forget(Wire*) override {
-        addend1->reset_signal(this);
-        addend2->reset_signal(this);
-        sum->reset_signal(this);
+    void on_forget(Wire* w) override {
+        if (w != addend1) addend1->reset_signal(this);
+        if (w != addend2) addend2->reset_signal(this);
+        if (w != sum) sum->reset_signal(this);
+        on_update(nullptr);
+    }
+};
+
+class Negater: public Device {
+    Wire* in;
+    Wire* out;
+public:
+    Negater(Wire* i, Wire* o): in{i}, out{o} {
+        in->add_constraint(this);
+        out->add_constraint(this);
+    }
+    void on_update(Wire*) override {
+        if (in->is_set()) {
+            out->set_signal(-(double)**in, this);
+        }
+        else if (out->is_set()) {
+            in->set_signal(-(double)**out, this);
+        }
+    }
+    void on_forget(Wire* w) override {
+        if (w != in) in->reset_signal(this);
+        if (w != out) out->reset_signal(this);
         on_update(nullptr);
     }
 };
 
 int main() {
-    Wire a1{"a1"}, a2{"a2"}, sum{"sum"};
+    Wire a1{"a1"}, a2{"a2"}, na2{"na2"}, sum{"sum"};
     PrintDevice print;
     a1.add_constraint(&print);
     a2.add_constraint(&print);
+    na2.add_constraint(&print);
     sum.add_constraint(&print);
-    Adder adder{&a1, &a2, &sum};
+    Negater negater{&a2, &na2};
+    Adder adder{&a1, &na2, &sum};
     a1.set_signal(5, &Device::USER);
     a2.set_signal(6, &Device::USER);
     a2.reset_signal(&Device::USER);
